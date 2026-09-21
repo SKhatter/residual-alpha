@@ -1,0 +1,191 @@
+# residual-alpha default configuration.
+#
+# Every number here is a research decision. Changing one and re-running the
+# backtest is a degree of freedom -- see docs/PROTOCOL.md.
+
+data:
+  start: "2012-01-01"
+  end: "2024-12-31"
+  cache_dir: "data/cache"
+  # Names we try to predict. Liquid US large caps across several sectors.
+  universe:
+    - AAPL
+    - MSFT
+    - NVDA
+    - AMZN
+    - GOOGL
+    - META
+    - AVGO
+    - ORCL
+    - CRM
+    - AMD
+    - JPM
+    - BAC
+    - GS
+    - WFC
+    - XOM
+    - CVX
+    - COP
+    - JNJ
+    - UNH
+    - PFE
+    - LLY
+    - ABBV
+    - PG
+    - KO
+    - PEP
+    - WMT
+    - COST
+    - HD
+    - MCD
+    - NKE
+    - CAT
+    - BA
+    - HON
+    - GE
+    - UNP
+    - LIN
+    - NEE
+    - DUK
+    - AMT
+    - PLD
+  # Market factor and the sector ETF each name loads on.
+  market: SPY
+  sector_maping_note: "ticker -> sector ETF used as the second risk factor"
+  sector_map:
+    AAPL: XLK
+    MSFT: XLK
+    NVDA: XLK
+    AVGO: XLK
+    ORCL: XLK
+    CRM: XLK
+    AMD: XLK
+    AMZN: XLY
+    HD: XLY
+    MCD: XLY
+    NKE: XLY
+    GOOGL: XLC
+    META: XLC
+    JPM: XLF
+    BAC: XLF
+    GS: XLF
+    WFC: XLF
+    XOM: XLE
+    CVX: XLE
+    COP: XLE
+    JNJ: XLV
+    UNH: XLV
+    PFE: XLV
+    LLY: XLV
+    ABBV: XLV
+    PG: XLP
+    KO: XLP
+    PEP: XLP
+    WMT: XLP
+    COST: XLP
+    CAT: XLI
+    BA: XLI
+    HON: XLI
+    GE: XLI
+    UNP: XLI
+    LIN: XLB
+    NEE: XLU
+    DUK: XLU
+    AMT: XLRE
+    PLD: XLRE
+  # Extra series pulled for features but never traded.
+  auxiliary:
+    - ^VIX      # implied volatility
+    - ^TNX      # 10y treasury yield
+    - ^IRX      # 13w treasury bill
+    - RSP       # equal weight S&P, for breadth vs SPY
+    - HYG       # credit risk appetite
+    - TLT       # duration
+
+target:
+  # Forecast the BETA-RESIDUAL return, not the raw return. This is the single
+  # most important design choice in the repo -- raw single-stock returns are
+  # dominated by the market factor, which is the least predictable part.
+  kind: residual        # residual | raw
+  horizon_days: 1
+  beta_window: 252      # rolling window for factor betas, strictly past data
+  beta_min_periods: 120
+  winsorize_sigma: 6.0  # clip target at +/- N rolling sigma to tame fat tails
+  # Estimate the regression intercept (always) but do not subtract it. A hedged
+  # book earns r - beta*f; nothing lets you short a stock's own trailing drift,
+  # so subtracting alpha makes the target score far better than it can trade.
+  # True reproduces that non-tradeable target -- see docs/PROTOCOL.md.
+  subtract_alpha: false
+
+features:
+  # Past-only covariates. These are all we have -- none are known in advance.
+  lookback: 256
+  # Known-FUTURE covariates. Dates we genuinely know ahead of time. This is
+  # where TimesFM-3's covariate support actually earns its keep.
+  calendar:
+    enabled: true
+    day_of_week: true
+    turn_of_month: true
+    fomc_dates: "config/fomc_dates.csv"
+    earnings_dates: "config/earnings_dates.csv"   # optional, may be absent
+  # Availability lag in trading days applied to every feature before use.
+  # 0 = features from close t are usable for a market-on-close trade at t.
+  availability_lag: 0
+
+backtest:
+  # Signal is formed from data through close t, executed at close t+execution_lag.
+  execution_lag: 1
+  # Walk-forward
+  train_years: 4
+  test_months: 6
+  # Purge = horizon so no training label overlaps the test window.
+  # Embargo removes additional days after the test block from the next train set.
+  embargo_days: 10
+  # Portfolio construction
+  max_weight: 0.05          # per-name cap, gross
+  gross_leverage: 1.0
+  neutralize: [market, sector]
+  # Costs
+  cost_bps: 5.0             # round-trip cost per unit turnover, in bps
+  spread_bps: 2.0
+  borrow_bps_annual: 50.0   # on short notional
+  max_daily_turnover: 0.25  # cap, fraction of gross
+
+gate:
+  enabled: true
+  # Trade only when the model's q90-q10 interval is tight. NOTE: this is very
+  # close to a low-volatility filter -- the ablation in `ralpha ablate-gate`
+  # exists to find out whether it adds anything beyond trailing realized vol.
+  width_percentile: 0.6     # keep the tightest 60% of names each day
+  min_names: 10
+
+holdout:
+  # Reserved slice. `ralpha backtest` refuses to touch it. `ralpha holdout`
+  # runs on it and records the run in .holdout_ledger.json -- one look only.
+  start: "2023-01-01"
+  lock_file: ".holdout_ledger.json"
+
+models:
+  quantiles: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  enabled:
+    - zero          # null model: predicts 0 residual return, empirical spread
+    - ridge         # linear on the same features
+    - gbm           # gradient boosting, quantile loss
+    # - timesfm3    # enable once the checkpoint is available locally
+  ridge:
+    alphas: [1.0, 10.0, 100.0, 1000.0]
+  gbm:
+    max_iter: 200
+    learning_rate: 0.05
+    max_depth: 3
+    min_samples_leaf: 200
+    l2_regularization: 1.0
+  timesfm3:
+    checkpoint: "google/timesfm-3.0-pytorch"
+    context_length: 512
+    device: null            # null -> auto (cuda/mps/cpu)
+    batch_size: 4
+    # Hard cap in the v3 implementation; covariates beyond this are subsampled.
+    max_covariates: 31
+
+seed: 7
