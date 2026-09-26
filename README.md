@@ -232,7 +232,10 @@ computation, and `.holdout_ledger.json` -- committed, not ignored -- records
 every look with the config hash that produced it.
 
 Full methodology, including the complete list of degrees of freedom already
-spent, is in [docs/PROTOCOL.md](docs/PROTOCOL.md).
+spent, is in [docs/PROTOCOL.md](docs/PROTOCOL.md). If the terms above are
+unfamiliar -- residual returns, why costs dominate, what "calibrated" means and
+why it is not the same as being right -- start with
+[docs/CONCEPTS.md](docs/CONCEPTS.md).
 
 ## Layout
 
@@ -252,6 +255,7 @@ src/ralpha/
 tests/                 61 tests, weighted toward lookahead and alignment
 config/default.yaml    the 40-name research config; every knob is a decision
 config/smoke_timesfm.yaml  12-name reduced config, ~20 min with TimesFM
+docs/CONCEPTS.md       residual targets, cost arithmetic, calibration
 docs/PROTOCOL.md       research protocol and degrees of freedom
 ```
 
