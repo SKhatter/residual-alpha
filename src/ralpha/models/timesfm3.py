@@ -77,11 +77,15 @@ class TimesFM3Forecaster(QuantileForecaster):
     if self._model is not None:
       return self._model
     try:
-      from timesfm3 import TimesFM3Forecaster as _TFM
+      # The distribution is `timesfm`; the v3 classes are exported from its
+      # top-level namespace. `timesfm3` also imports but is empty, so importing
+      # from it fails only at attribute access -- hence the explicit module.
+      from timesfm import TimesFM3Forecaster as _TFM
     except ImportError as exc:
       raise ImportError(
-        "timesfm3 is not installed. From a clone of google-research/timesfm:\n"
-        "    pip install -e '.[torch]'\n"
+        "timesfm is not installed. Install the v3 release:\n"
+        "    pip install 'timesfm[torch]==3.0.2'\n"
+        "Pin numpy<2 alongside it if scikit-learn is also in the environment.\n"
         "The TimesFM-3 weights are released for non-commercial, "
         "non-production use only -- check the licence before relying on this."
       ) from exc

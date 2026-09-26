@@ -7,57 +7,64 @@ equity returns. It asks one question and tries hard to answer it honestly:
 > forecast single-stock **beta-residual** returns well enough to trade after
 > costs?
 
-**That question is not yet answered.** TimesFM-3 has not been run. The adapter
-in [`models/timesfm3.py`](src/ralpha/models/timesfm3.py) is written but
-unexercised -- no checkpoint installed, no test covers it, `timesfm3` is
-commented out of `models.enabled`.
+**Answer: no -- and how it fails is the interesting part.** TimesFM-3 is the
+best-calibrated forecaster in this repo and its worst trading signal.
 
-What *has* been measured is the bake-off's control arm -- ridge and GBM on the
-same features, against a zero-forecast null -- and it produced a result that
-constrains the original question:
+- Best *distributions* of any model tested: highest pinball skill (2.59% over
+  the null), near-exact interval coverage (0.801 against 0.800 nominal), lowest
+  calibration chi-square.
+- Worst *direction* of any fitted model: IC 0.0033 at t = 0.75, against ridge's
+  0.0108 at t = 2.46. Ridge is the only model here with statistically
+  significant directional skill.
+- Last on the book: +0.21%/yr gross versus ridge's +0.73% and GBM's +2.45%,
+  with costs at 32x its gross edge.
 
-- There is real but marginal forecast skill: **IC 0.011, t = 2.5**.
-- The strategy's cost structure imposes an **8.3%/yr drag** at 45% daily
-  turnover. That number comes from the holding period and the cost assumptions,
-  not from the model.
-- So the gross edge needed to break even is roughly **10x** what ridge
-  achieves. TimesFM-3 would face the same bar.
+Knowing how uncertain you are is not the same as knowing which way to bet, and
+a cross-sectional strategy is paid only for the second. Pinball loss is
+dominated by distribution width, so a model can win it decisively while adding
+nothing a book can trade -- which is exactly what happened, and is the reason
+the `zero` null and the PnL simulation both exist.
 
-The honest summary: at a one-day horizon on 40 large caps, the economics are
-the binding constraint, and no forecaster has cleared them here. Whether a
-foundation model clears it is an open question this repo is set up to answer
-but has not.
+Underneath that, the cost structure binds every model: **8.3%/yr of drag** at
+45% daily turnover, which is arithmetic about the holding period rather than a
+property of any forecaster. No model tested clears it.
 
 ## Results
 
-Development window 2012-2022, walk-forward out-of-sample, 13 folds, 1,762
-trading days, 68,876 predictions. Holdout (2023+) untouched — the ledger is
-empty. **Baselines only — TimesFM-3 is not in any table below.**
+Development window 2012-2022, walk-forward out-of-sample, 14 folds, 1,762
+trading days, 68,876 predictions per model. Holdout (2023+) untouched — the
+ledger is empty.
 
 **Forecast quality** — skill is measured against the `zero` null, not in
 absolute terms:
 
-| model | pinball skill | IC | IC t-stat | 80% coverage | calibration p |
-| --- | --- | --- | --- | --- | --- |
-| zero  | 0.0%  | –      | –    | 0.771 | 0.000 |
-| ridge | 2.09% | 0.0108 | 2.46 | 0.794 | 0.002 |
-| gbm   | 1.94% | 0.0095 | 2.21 | 0.778 | 0.000 |
+| model | pinball skill | IC | IC t-stat | 80% coverage | calibration p | tail mass (nom. 0.200) |
+| --- | --- | --- | --- | --- | --- | --- |
+| zero     | 0.0%      | –          | –        | 0.771     | 0.000     | 0.229     |
+| ridge    | 2.09%     | **0.0108** | **2.46** | 0.794     | 0.002     | 0.207     |
+| gbm      | 1.94%     | 0.0073     | 1.74     | 0.778     | 0.000     | 0.223     |
+| timesfm3 | **2.59%** | 0.0033     | 0.75     | **0.801** | **0.007** | **0.199** |
 
-There is skill, and it is small. An IC of 0.011 at t = 2.5 is barely
-distinguishable from noise on eleven years of daily data, and it is an order of
-magnitude below what the pre-correction target reported (see below).
+The two columns disagree, and that disagreement is the main result.
+`timesfm3` wins every distributional measure; `ridge` is the only model whose
+directional skill clears t = 2. An IC of 0.011 is small in absolute terms and
+an order of magnitude below what the pre-correction target reported (see below).
 
 **Portfolio** — dollar-neutral, market/sector hedged, net of costs:
 
 | model | gross | net | vol | Sharpe | Sharpe t | turnover | costs ÷ gross |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| ridge | +0.73% | **−7.30%** | 3.10% | −2.35 | −3.20 | 0.45 | 10.7× |
-| gbm   | +2.72% | **−4.88%** | 2.14% | −2.28 | −3.18 | 0.42 | 2.8× |
+| ridge    | +0.73% | **−7.30%** | 3.10% | −2.35 | −3.20 | 0.45 | 10.7× |
+| gbm      | +2.45% | **−5.14%** | 2.09% | −2.46 | −3.24 | 0.42 | 3.2× |
+| timesfm3 | +0.21% | **−7.47%** | 2.47% | −3.02 | −3.39 | 0.43 | 32.5× |
 
-The gross edge is real and positive. It is 3–11× too small to pay for the
-turnover required to collect it. The negative Sharpe carries a large t-stat
-not because the strategy is reliably skilful in reverse, but because costs are
-deterministic: you pay them every day whether or not the forecast lands.
+Every model has a positive gross edge and every one is 3–32x too small to pay
+for the turnover required to collect it. The negative Sharpes carry large
+t-stats not because any strategy is reliably skilful in reverse, but because
+costs are deterministic: you pay them daily whether or not the forecast lands.
+
+Note that GBM has the largest gross edge while ranking second-worst on
+calibration — another instance of the two axes coming apart.
 
 **The confidence gate is a volatility filter.** Matched trade counts, ridge:
 
@@ -108,20 +115,64 @@ The pipeline:
 
 ## Quick start
 
+TimesFM-3 needs torch >= 2.4 (the v3 model uses `nn.RMSNorm`) and pandas < 3
+(`stack(dropna=False)` is an error in pandas 3). A dedicated venv is the
+path of least resistance:
+
 ```bash
-pip install -e '.[dev]'
+python3 -m venv .venv
+.venv/bin/pip install -e '.[dev]' 'timesfm[torch]==3.0.2' 'torch>=2.4' 'pandas<3'
 
 python scripts/fetch_fomc_dates.py --start 2012 --end 2027   # scheduled meetings
-ralpha build                                                  # ~1 min, caches to data/
-ralpha bakeoff                                                # forecast quality
-ralpha backtest                                               # PnL, net of costs
-ralpha ablate-gate --model ridge                              # is the gate real?
-pytest                                                        # 61 tests
+.venv/bin/ralpha build                                       # ~1 min, caches to data/
+.venv/bin/ralpha bakeoff                                     # forecast quality
+.venv/bin/ralpha backtest --cached                           # PnL, reuses predictions
+.venv/bin/ralpha ablate-gate --model ridge                   # is the gate real?
+.venv/bin/python -m pytest                                   # 61 tests
 ```
 
-TimesFM-3 is optional and off by default. To enable it, install the upstream
-package (`pip install -e '/path/to/timesfm[torch]'`) and uncomment `timesfm3`
-under `models.enabled`. Its weights are released for non-commercial use only.
+Runtimes on an M3 Pro: `bakeoff` with all four models is **~2 hours** (TimesFM
+is ~510s per fold and the checkpoint is reloaded every fold), `backtest
+--cached` is ~4 min, and dropping `timesfm3` from `models.enabled` brings a
+full run down to ~9 min. Start with `-c config/smoke_timesfm.yaml` for a
+12-name, ~20-minute version. TimesFM-3 weights are non-commercial use only.
+
+## What running TimesFM-3 actually taught us
+
+**Its uncertainty estimates need no correction.** The adapter fits an affine
+recalibration per fold on the assumption -- stated in its own docstring -- that
+pretrained quantile heads are "near-certainly too narrow on financial returns."
+They are not. The fitted spread rescale factors across 14 folds:
+
+```
+0.975  0.955  0.971  0.936  0.961  0.980  1.002
+1.022  0.978  1.014  0.995  0.991  0.959  0.961
+```
+
+All within ±6% of 1.0, mean 0.977. TimesFM-3 is essentially calibrated
+out of the box for daily equity residuals, which is why its coverage beats
+every fitted baseline. That contradicts the assumption the adapter was written
+under and is the most transferable thing in this repo.
+
+**Its directional signal is unstable, not merely weak.** The median
+recalibration slope -- realised return regressed on predicted median, fit per
+fold -- should be consistently positive for a forecaster with real signal:
+
+```
++0.82  +0.50  +0.52  +0.04  +0.07  −0.54  −0.02
+−0.81  +0.10  +0.33  +0.32  +0.08  +0.00  −0.25
+```
+
+Mean +0.08, with 4 of 14 negative. The first three folds are strongly positive
+and it collapses after. A strategy whose recalibration coefficient changes sign
+between folds is trading against its own forecast a quarter of the time.
+
+**A 12-name pilot reversed under scaling.** On a reduced 12-name universe
+(`config/smoke_timesfm.yaml`) TimesFM looked like the winner: gross Sharpe
++0.51 against ridge's −0.26. At 40 names it came last. The pilot's IC t-stats
+were all below 1, so nothing there was significant -- but it is a clean
+reminder that an underpowered comparison can point the wrong way, not merely
+be noisy.
 
 ## The finding that changed the result
 
@@ -199,16 +250,21 @@ src/ralpha/
   backtest/            purged+embargoed splits, hedged PnL simulation
   evaluation/          pinball loss, coverage, calibration tests
 tests/                 61 tests, weighted toward lookahead and alignment
+config/default.yaml    the 40-name research config; every knob is a decision
+config/smoke_timesfm.yaml  12-name reduced config, ~20 min with TimesFM
 docs/PROTOCOL.md       research protocol and degrees of freedom
 ```
 
 ## Limitations
 
-- **The headline model has not been run.** TimesFM-3 is the reason this repo
-  exists and it is entirely untested here. The adapter is written against the
-  real v3 API and handles the traps documented at the top of that file, but
-  code that has never executed should be assumed broken until it runs. Nothing
-  in the results speaks to foundation-model performance either way.
+- **Pretraining overlap cannot be ruled out.** TimesFM-3 is pretrained on a
+  large corpus of public time series. If that corpus includes these tickers
+  over 2012-2022, its forecasts are contaminated in a way no amount of purging
+  or embargoing can fix, because the leak happened before this repo saw the
+  data. The decay pattern in the recalibration slopes (strong in the earliest
+  folds, gone later) is consistent with contamination but also with plain
+  instability; this harness cannot distinguish them. Any zero-shot foundation
+  model evaluated on historical market data has this problem.
 - **40 names is a small cross-section.** Cross-sectional strategies get most of
   their Sharpe from breadth; a 40-name universe caps what is achievable and
   makes the daily IC noisy.

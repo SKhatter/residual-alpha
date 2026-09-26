@@ -171,7 +171,9 @@ models:
     - zero          # null model: predicts 0 residual return, empirical spread
     - ridge         # linear on the same features
     - gbm           # gradient boosting, quantile loss
-    # - timesfm3    # enable once the checkpoint is available locally
+    # Requires `pip install 'timesfm[torch]==3.0.2'` and torch >= 2.4 (the v3
+    # model uses nn.RMSNorm). Adds ~85 min to a full walk-forward on an M3 Pro.
+    - timesfm3      # the model this repo exists to evaluate
   ridge:
     alphas: [1.0, 10.0, 100.0, 1000.0]
   gbm:

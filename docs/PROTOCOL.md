@@ -191,6 +191,26 @@ to what a truly fresh sample would give:
 6. Cost model: the numbers in section 6.
 7. Model hyperparameters: the ridge alpha grid and the GBM settings in
    `config/default.yaml`.
+8. TimesFM-3 settings: 512-day context, per-fold affine recalibration on 2,000
+   samples, `make_positive=False`. The recalibration is itself a fitted
+   quantity and a source of instability -- its slope changes sign across folds
+   (see the README), so it is a degree of freedom that does not pay for itself.
+
+## A degree of freedom this harness cannot control
+
+TimesFM-3 is pretrained on a large corpus of public time series. If that corpus
+includes these tickers over the development window, its forecasts are
+contaminated before this repo ever touches the data, and no amount of purging,
+embargoing or holdout discipline can repair it. Purge and embargo protect
+against leakage *within* the experiment; they are silent about leakage that
+happened during someone else's pretraining run.
+
+The recalibration slopes decay sharply after the first three folds, which is
+consistent with contamination and equally consistent with the model simply
+having no stable signal. Nothing here distinguishes the two. This is a
+structural limitation of evaluating any zero-shot foundation model on
+historical market data, and it should be stated whenever such a result is
+reported -- including favourable ones.
 
 None of these were selected against the holdout. All of them were selected with
 some view of development results, which is exactly why the development Sharpe

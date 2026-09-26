@@ -1,0 +1,127 @@
+# Reduced-scope config for the first real TimesFM-3 run.
+#
+# Purpose: get the foundation model through the full pipeline end to end at a
+# cost of ~20 minutes rather than ~85, and find out whether it beats ridge on
+# the same rows. NOT comparable to the 40-name results in the README -- the
+# universe, the per-name cap and the gate floor all differ. Compare models
+# WITHIN this file's results, never across files.
+#
+#   .venv/bin/ralpha -c config/smoke_timesfm.yaml bakeoff
+
+data:
+  start: "2014-01-01"
+  # TimesFM needs 512 days of clean residual history before its first forecast,
+  # and residuals need beta_min_periods before they exist at all. Starting in
+  # 2014 for a 2017 first test block leaves room for both.
+  end: "2022-12-31"
+  cache_dir: "data/cache"
+  # Two names in each of six sectors. Pairs matter: peer_ret is the
+  # equal-weight return of same-sector peers excluding the name itself, so a
+  # sector with a single member would contribute an all-zero covariate.
+  universe:
+    - AAPL
+    - MSFT
+    - JPM
+    - BAC
+    - XOM
+    - CVX
+    - JNJ
+    - UNH
+    - PG
+    - KO
+    - CAT
+    - HON
+  market: SPY
+  sector_map:
+    AAPL: XLK
+    MSFT: XLK
+    JPM: XLF
+    BAC: XLF
+    XOM: XLE
+    CVX: XLE
+    JNJ: XLV
+    UNH: XLV
+    PG: XLP
+    KO: XLP
+    CAT: XLI
+    HON: XLI
+  auxiliary:
+    - ^VIX
+    - ^TNX
+    - ^IRX
+    - RSP
+    - HYG
+    - TLT
+
+target:
+  kind: residual
+  horizon_days: 1
+  beta_window: 252
+  beta_min_periods: 120
+  winsorize_sigma: 6.0
+  subtract_alpha: false
+
+features:
+  lookback: 256
+  calendar:
+    enabled: true
+    day_of_week: true
+    turn_of_month: true
+    fomc_dates: "config/fomc_dates.csv"
+    earnings_dates: "config/earnings_dates.csv"
+  availability_lag: 0
+
+backtest:
+  execution_lag: 1
+  # 3y train / 12m test gives 6 folds over 2017-2022, against 13 in the full
+  # config. Fewer refits is most of the time saving.
+  train_years: 3
+  test_months: 12
+  embargo_days: 10
+  # A 12-name book cannot reach gross 1.0 under a 5% cap, so the cap is raised
+  # to keep the gross target reachable. This is why PnL here is not comparable
+  # to the 40-name run.
+  max_weight: 0.15
+  gross_leverage: 1.0
+  neutralize: [market, sector]
+  cost_bps: 5.0
+  spread_bps: 2.0
+  borrow_bps_annual: 50.0
+  max_daily_turnover: 0.25
+
+gate:
+  enabled: true
+  width_percentile: 0.6
+  # Lowered from 10: with 12 names a floor of 10 would leave the gate selecting
+  # 10 of 12 every day, i.e. no gate at all.
+  min_names: 4
+
+holdout:
+  start: "2023-01-01"
+  lock_file: ".holdout_ledger.json"
+
+models:
+  quantiles: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  enabled:
+    - zero
+    - ridge
+    - timesfm3
+  ridge:
+    alphas: [1.0, 10.0, 100.0, 1000.0]
+  gbm:
+    max_iter: 200
+    learning_rate: 0.05
+    max_depth: 3
+    min_samples_leaf: 200
+    l2_regularization: 1.0
+  timesfm3:
+    checkpoint: "google/timesfm-3.0-pytorch"
+    context_length: 512
+    device: null
+    batch_size: 16
+    max_covariates: 31
+    # Halved from the default 2000. Two scalars are being fit; 1000 points is
+    # ample and this runs once per fold.
+    calibration_samples: 1000
+
+seed: 7

@@ -5,6 +5,12 @@ data/cache/
 # and stale the moment the target or features change -- committing them invites
 # someone to read numbers that no longer match the code.
 artifacts/
+# Scoped copies made by hand because ARTIFACTS is hardcoded in cli.py and an
+# alternate --config run would otherwise clobber the default config's saved
+# predictions. See the note in README.
+artifacts_full40/
+artifacts_smoke12/
+*.log
 
 # NOTE: .holdout_ledger.json is deliberately NOT ignored. The record of how many
 # times the holdout has been looked at is the audit trail; losing it defeats the
