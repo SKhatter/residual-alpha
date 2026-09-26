@@ -7,16 +7,32 @@ equity returns. It asks one question and tries hard to answer it honestly:
 > forecast single-stock **beta-residual** returns well enough to trade after
 > costs?
 
-The current answer is **no, not on this universe** -- there is measurable
-forecast skill, but it is smaller than the frictions required to harvest it.
-The repo is built so that this kind of answer is reachable, which is most of
-the reason it exists.
+**That question is not yet answered.** TimesFM-3 has not been run. The adapter
+in [`models/timesfm3.py`](src/ralpha/models/timesfm3.py) is written but
+unexercised -- no checkpoint installed, no test covers it, `timesfm3` is
+commented out of `models.enabled`.
+
+What *has* been measured is the bake-off's control arm -- ridge and GBM on the
+same features, against a zero-forecast null -- and it produced a result that
+constrains the original question:
+
+- There is real but marginal forecast skill: **IC 0.011, t = 2.5**.
+- The strategy's cost structure imposes an **8.3%/yr drag** at 45% daily
+  turnover. That number comes from the holding period and the cost assumptions,
+  not from the model.
+- So the gross edge needed to break even is roughly **10x** what ridge
+  achieves. TimesFM-3 would face the same bar.
+
+The honest summary: at a one-day horizon on 40 large caps, the economics are
+the binding constraint, and no forecaster has cleared them here. Whether a
+foundation model clears it is an open question this repo is set up to answer
+but has not.
 
 ## Results
 
 Development window 2012-2022, walk-forward out-of-sample, 13 folds, 1,762
 trading days, 68,876 predictions. Holdout (2023+) untouched — the ledger is
-empty.
+empty. **Baselines only — TimesFM-3 is not in any table below.**
 
 **Forecast quality** — skill is measured against the `zero` null, not in
 absolute terms:
@@ -188,6 +204,11 @@ docs/PROTOCOL.md       research protocol and degrees of freedom
 
 ## Limitations
 
+- **The headline model has not been run.** TimesFM-3 is the reason this repo
+  exists and it is entirely untested here. The adapter is written against the
+  real v3 API and handles the traps documented at the top of that file, but
+  code that has never executed should be assumed broken until it runs. Nothing
+  in the results speaks to foundation-model performance either way.
 - **40 names is a small cross-section.** Cross-sectional strategies get most of
   their Sharpe from breadth; a 40-name universe caps what is achievable and
   makes the daily IC noisy.
