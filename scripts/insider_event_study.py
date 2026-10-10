@@ -105,6 +105,104 @@ def _download(tickers: list[str], start: str, end: str, cache: Path) -> pd.DataF
   return px
 
 
+def _download_volume(tickers: list[str], start: str, end: str, cache: Path) -> pd.DataFrame:
+  """Daily share volume for the same symbols, cached separately."""
+  if cache.exists():
+    return pd.read_parquet(cache)
+
+  import yfinance as yf
+
+  frames = []
+  symbols = sorted(set(tickers))
+  for i in range(0, len(symbols), 100):
+    chunk = symbols[i : i + 100]
+    print(f"  volume {i+1}-{i+len(chunk)} of {len(symbols)}", file=sys.stderr)
+    raw = yf.download(
+      chunk, start=start, end=end, auto_adjust=True, progress=False, threads=True
+    )
+    if raw is None or raw.empty:
+      continue
+    vol = raw["Volume"] if isinstance(raw.columns, pd.MultiIndex) else raw[["Volume"]]
+    frames.append(vol)
+
+  vol = pd.concat(frames, axis=1)
+  vol = vol.loc[:, ~vol.columns.duplicated()].sort_index()
+  cache.parent.mkdir(parents=True, exist_ok=True)
+  vol.to_parquet(cache)
+  return vol
+
+
+def _liquidity_panel(px: pd.DataFrame, vol: pd.DataFrame, window: int = 60) -> pd.DataFrame:
+  """Trailing median daily dollar volume, strictly causal.
+
+  Median rather than mean: volume is spiky, and one earnings day should not
+  define a name's normal liquidity. Shifted by one day so the value available
+  at entry uses only prior sessions.
+  """
+  cols = [c for c in px.columns if c != BENCHMARK and c in vol.columns]
+  dollar = px[cols] * vol[cols].reindex_like(px[cols])
+  return dollar.rolling(window, min_periods=20).median().shift(1)
+
+
+def _sign_row(s: pd.Series) -> tuple[float, float, float, int]:
+  from scipy import stats
+
+  s = s.dropna()
+  n = len(s)
+  if n < 50:
+    return (np.nan, np.nan, np.nan, n)
+  w = int((s > 0).sum())
+  return (s.median(), w / n, stats.binomtest(w, n, 0.5).pvalue, n)
+
+
+def report_normalised(ev: pd.DataFrame) -> None:
+  """Is 'conviction' real, or is purchase size just a proxy for company size?
+
+  Raw dollar size runs backwards -- bigger purchases predict less -- but big
+  purchases happen at big companies, which are harder to predict for reasons
+  that have nothing to do with insiders. Dividing by trailing dollar volume
+  turns the purchase into 'days of normal trading volume', which is comparable
+  across a microcap and a mega-cap.
+  """
+  ev = ev[ev.rel_size.notna() & ev.ar_126d.notna()]
+  print(f"\n{'='*70}\nNORMALISED BY LIQUIDITY  (n = {len(ev):,})\n{'='*70}")
+
+  print("\n--- A. conviction: purchase as a share of daily dollar volume ---")
+  bins = [0, 0.01, 0.05, 0.25, 1.0, np.inf]
+  labels = ["<1%", "1-5%", "5-25%", "25-100%", ">100%"]
+  ev = ev.assign(rel_bucket=pd.cut(ev.rel_size, bins, labels=labels))
+  print(f"  {'rel. size':>10} {'n':>7} {'median AR':>11} {'% beating':>10} {'p':>8}")
+  for b, g in ev.groupby("rel_bucket", observed=True):
+    m, f, p, n = _sign_row(g.ar_126d)
+    if np.isnan(m):
+      continue
+    print(f"  {str(b):>10} {n:>7,} {m*100:+10.2f}% {f*100:9.1f}% {p:8.4f}")
+
+  print("\n--- B. control: liquidity alone, ignoring how much was bought ---")
+  ev = ev.assign(liq_bucket=pd.qcut(ev.liquidity, 3, labels=["illiquid", "mid", "liquid"]))
+  print(f"  {'liquidity':>10} {'n':>7} {'median AR':>11} {'% beating':>10} {'p':>8}")
+  for b, g in ev.groupby("liq_bucket", observed=True):
+    m, f, p, n = _sign_row(g.ar_126d)
+    if np.isnan(m):
+      continue
+    print(f"  {str(b):>10} {n:>7,} {m*100:+10.2f}% {f*100:9.1f}% {p:8.4f}")
+
+  print("\n--- C. double sort: does conviction predict WITHIN a liquidity bucket? ---")
+  ev = ev.assign(rel_tercile=pd.qcut(ev.rel_size, 3, labels=["low", "mid", "high"]))
+  print(f"  {'':>10} " + "".join(f"{c:>22}" for c in ["low conviction", "mid", "high conviction"]))
+  for lb in ["illiquid", "mid", "liquid"]:
+    cells = []
+    for rb in ["low", "mid", "high"]:
+      g = ev[(ev.liq_bucket == lb) & (ev.rel_tercile == rb)]
+      m, f, p, n = _sign_row(g.ar_126d)
+      cells.append("           n/a        " if np.isnan(m)
+                   else f"{m*100:+8.2f}% {f*100:5.1f}% n={n:<5,}")
+    print(f"  {lb:>10} " + "".join(cells))
+  print("\n  Read across a row: if conviction matters, high beats low within the")
+  print("  same liquidity bucket. Read down a column: if only company size")
+  print("  matters, rows differ and columns do not.")
+
+
 def _abnormal_panel(px: pd.DataFrame) -> dict[int, pd.DataFrame]:
   """Universe-demeaned forward returns, one frame per horizon.
 
@@ -219,6 +317,9 @@ def main(argv: list[str] | None = None) -> int:
                  help="keep the N tickers with the most events, to bound the download")
   p.add_argument("--price-cache", default="data/cache/insider_prices.parquet")
   p.add_argument("--out", default="data/insider_event_study.parquet")
+  p.add_argument("--volume-cache", default="data/cache/insider_volume.parquet")
+  p.add_argument("--normalize", action="store_true",
+                 help="normalise purchase size by trailing dollar volume")
   args = p.parse_args(argv)
 
   trans = Path(args.transactions)
@@ -240,6 +341,20 @@ def main(argv: list[str] | None = None) -> int:
   print(f"price panel: {px.shape[0]} dates x {px.shape[1]} symbols")
 
   res = _forward_returns(px, events)
+
+  if args.normalize:
+    vol = _download_volume(top, lo, hi, Path(args.volume_cache))
+    liq = _liquidity_panel(px, vol)
+    vals = []
+    for r in res.itertuples(index=False):
+      if r.ticker in liq.columns and r.entry_date in liq.index:
+        v = liq.at[r.entry_date, r.ticker]
+        vals.append(v if np.isfinite(v) and v > 0 else np.nan)
+      else:
+        vals.append(np.nan)
+    res["liquidity"] = vals
+    res["rel_size"] = res.total_value / res.liquidity
+
   Path(args.out).parent.mkdir(parents=True, exist_ok=True)
   res.to_parquet(args.out, index=False)
   print(f"matched {len(res):,} events to prices -> {args.out}")
@@ -265,6 +380,9 @@ def main(argv: list[str] | None = None) -> int:
   _report(big, "purchases >= $100k")
   huge = res[res.total_value >= 1_000_000]
   _report(huge, "purchases >= $1M")
+
+  if args.normalize and "rel_size" in res.columns:
+    report_normalised(res)
 
   print("\nNote: events cluster in calendar time, so even the sign test is")
   print("optimistic. The 2022-2024 window is short, and yfinance history")
